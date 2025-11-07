@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hands-Free Dining Guide</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0d0d1e; }
+        .card { background-color: #1a1a36; border: 1px solid #333366; }
+        .shadow-neon { box-shadow: 0 0 10px rgba(76, 175, 80, 0.5); }
+        .loading-ring {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #4CAF50;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* Style for the voice button to make it look active */
+        .voice-active {
+            animation: pulse-green 1.5s infinite;
+            background-color: #38a169; /* darker green for active state */
+        }
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(76, 175, 80, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+        }
+        /* Icon styling */
+        .icon-microphone {
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+    </style>
+</head>
+<body class="text-white min-h-screen p-4 flex flex-col items-center">
+
+    <div id="app-container" class="w-full max-w-md">
+        <h1 class="text-3xl font-bold text-center text-green-400 my-6">Driving Dining Guide</h1>
+
+        <!-- Search Input & Controls -->
+        <div class="card p-5 rounded-xl shadow-neon mb-6">
+            <p class="text-sm text-gray-400 mb-4">Tap the mic and state your dining request (e.g., "Find a fine dining Italian place, 4.5 stars, open now").</p>
+
+            <div class="flex flex-col items-center">
+                <button id="voice-btn" class="w-20 h-20 rounded-full bg-green-500 hover:bg-green-600 transition-all duration-300 flex items-center justify-center p-2 focus:outline-none focus:ring-4 focus:ring-green-700" title="Start Voice Search">
+                    <svg class="w-10 h-10 text-white icon-microphone" viewBox="0 0 24 24">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                        <line x1="12" y1="19" x2="12" y2="23"></line>
+                        <line x1="8" y1="23" x2="16" y2="23"></line>
+                    </svg>
+                </button>
+                <p id="status-message" class="mt-3 text-sm text-gray-300">Tap to start voice command.</p>
+                <textarea id="search-input" class="w-full mt-4 p-3 rounded-lg bg-gray-700 text-white border border-gray-600 focus:ring-green-500 focus:border-green-500 resize-none" rows="2" placeholder="Voice Transcript or type here..." readonly></textarea>
+            </div>
+        </div>
+
+        <!-- Results Area -->
+        <div id="results-area" class="space-y-4">
+            <!-- Results will be injected here -->
+        </div>
+
+        <!-- Modal Placeholder (used for reservation success/error messages) -->
+        <div id="modal-container" class="fixed inset-0 bg-black bg-opacity-75 hidden items-center justify-center p-4 z-50">
+            <div id="modal-content" class="card p-6 rounded-xl w-full max-w-xs text-center">
+                <!-- Modal content goes here -->
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // --- Firebase/Canvas Required Constants (Not used for storage, but included as mandate) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+        // -----------------------------------------------------------------------------------------
+
+        const voiceBtn = document.getElementById('voice-btn');
+        const statusMessage = document.getElementById('status-message');
+        const searchInput = document.getElementById('search-input');
+        const resultsArea = document.getElementById('results-area');
+        const modalContainer = document.getElementById('modal-container');
+        const modalContent = document.getElementById('modal-content');
+
+        let isListening = false;
+        let Recognition;
+
+        // --- Utility Functions ---
+
+        function showModal(title, message, isSuccess = true) {
+            const color = isSuccess ? 'text-green-400' : 'text-red-400';
+            modalContent.innerHTML = `
+                <h3 class="text-xl font-bold ${color} mb-3">${title}</h3>
+                <p class="text-gray-300 mb-5">${message}</p>
+                <button onclick="closeModal()" class="w-full p-2 rounded-lg bg-green-600 hover:bg-green-700 font-semibold transition-colors">Close</button>
+            `;
+            modalContainer.classList.remove('hidden');
+            modalContainer.classList.add('flex');
+        }
+
+        window.closeModal = () => {
+            modalContainer.classList.add('hidden');
+            modalContainer.classList.remove('flex');
+        };
+
+        function showLoading(message) {
+            resultsArea.innerHTML = `
+                <div class="card p-6 rounded-xl flex flex-col items-center justify-center text-center space-y-3">
+                    <div class="loading-ring"></div>
+                    <p class="text-gray-300 text-sm">${message}</p>
+                </div>
+            `;
+        }
+
+        function showError(message) {
+            resultsArea.innerHTML = `
+                <div class="card p-6 rounded-xl text-center border-red-500 border-2">
+                    <p class="text-red-400 font-semibold">Error:</p>
+                    <p class="text-sm text-gray-300 mt-2">${message}</p>
+                </div>
+            `;
+        }
+
+        // --- Geolocation ---
+
+        function getLocation() {
+            return new Promise((resolve) => {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            resolve(`Latitude: ${position.coords.latitude}, Longitude: ${position.coords.longitude}`);
+                        },
+                        (error) => {
+                            // Default to a central US location if access is denied
+                            console.warn("Geolocation denied or unavailable. Using Denver, CO as placeholder.", error);
+                            resolve("Denver, Colorado, USA");
+                        },
+                        { timeout: 5000 }
+                    );
+                } else {
+                    console.warn("Geolocation not supported. Using Denver, CO as placeholder.");
+                    resolve("Denver, Colorado, USA");
+                }
+            });
+        }
+
+        // --- Voice Recognition ---
+
+        if ('webkitSpeechRecognition' in window) {
+            Recognition = new webkitSpeechRecognition();
+            Recognition.continuous = false;
+            Recognition.interimResults = false;
+            Recognition.lang = 'en-US';
+
+            Recognition.onstart = () => {
+                isListening = true;
+                voiceBtn.classList.add('voice-active');
+                statusMessage.textContent = 'Listening... Say your request.';
+            };
+
+            Recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                searchInput.value = transcript;
+                statusMessage.textContent = 'Processing request...';
+                findRestaurants(transcript);
+            };
+
+            Recognition.onerror = (event) => {
+                isListening = false;
+                voiceBtn.classList.remove('voice-active');
+                statusMessage.textContent = 'Tap to start voice command.';
+                if (event.error !== 'no-speech') {
+                    showError(`Voice Error: ${event.error}. Please try typing or speaking again.`);
+                }
+            };
+
+            Recognition.onend = () => {
+                isListening = false;
+                voiceBtn.classList.remove('voice-active');
+                if (statusMessage.textContent === 'Listening...') {
+                    statusMessage.textContent = 'No speech detected. Tap to retry.';
+                }
+            };
+
+            voiceBtn.addEventListener('click', () => {
+                if (isListening) {
+                    Recognition.stop();
+                } else {
+                    searchInput.value = '';
+                    resultsArea.innerHTML = '';
+                    Recognition.start();
+                }
+            });
+        } else {
+            statusMessage.textContent = 'Voice recognition is not supported in this browser.';
+            voiceBtn.disabled = true;
+            searchInput.readOnly = false;
+        }
+
+        // --- LLM API Logic ---
+
+        async function findRestaurants(voiceCommand) {
+            showLoading("Finding the best dining options using Gemini API...");
+            
+            const userLocation = await getLocation();
+
+            const userQuery = `Find three dining options that match this criteria: "${voiceCommand}". Assume I want the restaurants near ${userLocation}.`;
+            const apiKey = ""; // Canvas will provide this if not empty
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+            const systemPrompt = "You are a specialized search engine for local dining. Given a user's request, find three high-quality, relevant restaurant suggestions using the Google Search tool. Your response MUST strictly adhere to the provided JSON schema. For the 'rating', find the actual star rating from search results. For the 'openNow' field, determine if the restaurant is currently open based on the search results and current time. Ensure the search results are currently relevant to the user's location.";
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                tools: [{ "google_search": {} }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "ARRAY",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                "name": { "type": "STRING", "description": "The name of the restaurant." },
+                                "cuisine": { "type": "STRING", "description": "The primary cuisine type." },
+                                "rating": { "type": "NUMBER", "description": "The star rating (e.g., 4.7)." },
+                                "address": { "type": "STRING", "description": "The street address." },
+                                "openNow": { "type": "BOOLEAN", "description": "True if the restaurant is currently open, based on search results." }
+                            },
+                            required: ["name", "cuisine", "rating", "address", "openNow"]
+                        }
+                    }
+                }
+            };
+
+            let jsonResponse;
+            const MAX_RETRIES = 3;
+            for (let i = 0; i < MAX_RETRIES; i++) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        if (response.status === 429 && i < MAX_RETRIES - 1) {
+                            const delay = Math.pow(2, i) * 1000;
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                            continue;
+                        }
+                        throw new Error(`API call failed with status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+
+                    if (result.candidates && result.candidates.length > 0) {
+                        const jsonText = result.candidates[0].content?.parts?.[0]?.text;
+                        if (jsonText) {
+                            // LLM response is a string, needs parsing
+                            jsonResponse = JSON.parse(jsonText);
+                            break; // Exit loop on success
+                        }
+                    }
+                    throw new Error("Received empty or malformed response from the LLM.");
+
+                } catch (error) {
+                    if (i === MAX_RETRIES - 1) {
+                        console.error("Gemini API error:", error);
+                        showError("Failed to get restaurant suggestions. Please check your query or try again.");
+                        return;
+                    }
+                }
+            }
+
+            if (jsonResponse && Array.isArray(jsonResponse)) {
+                renderResults(jsonResponse);
+            } else {
+                showError("The search was successful, but no valid restaurants were suggested based on your criteria. Try being less specific!");
+            }
+        }
+
+        // --- Rendering Results ---
+
+        function renderResults(restaurants) {
+            resultsArea.innerHTML = '';
+            statusMessage.textContent = `Found ${restaurants.length} suggestions. Select one to reserve.`;
+
+            if (restaurants.length === 0) {
+                showError("No restaurants matched your criteria. Try a broader search.");
+                return;
+            }
+
+            restaurants.forEach((restaurant, index) => {
+                const isOpen = restaurant.openNow;
+                const openStatusText = isOpen ? 'Open Now' : 'Closed';
+                const openStatusColor = isOpen ? 'bg-green-600' : 'bg-red-600';
+
+                const cardHtml = `
+                    <div class="restaurant-card card p-4 rounded-xl shadow-lg flex flex-col space-y-3">
+                        <div class="flex justify-between items-start">
+                            <h3 class="text-lg font-bold text-green-300">${restaurant.name}</h3>
+                            <span class="text-sm font-semibold p-1 px-3 rounded-full ${openStatusColor}">${openStatusText}</span>
+                        </div>
+                        <p class="text-sm text-gray-300">${restaurant.address}</p>
+                        <div class="flex justify-between items-center text-sm text-gray-400">
+                            <span>${restaurant.cuisine} • ${restaurant.type}</span>
+                            <span class="font-semibold text-yellow-400">★ ${restaurant.rating}</span>
+                        </div>
+                        <button 
+                            data-name="${restaurant.name}" 
+                            data-open="${isOpen}"
+                            onclick="handleReservation(this)" 
+                            class="mt-2 w-full p-3 rounded-lg ${isOpen ? 'bg-green-700 hover:bg-green-600' : 'bg-gray-500 cursor-not-allowed' } transition-colors font-semibold"
+                            ${isOpen ? '' : 'disabled'}
+                        >
+                            ${isOpen ? 'Tap to Reserve Now' : 'Cannot Reserve (Closed)'}
+                        </button>
+                    </div>
+                `;
+                resultsArea.insertAdjacentHTML('beforeend', cardHtml);
+            });
+        }
+
+        // --- Reservation Simulation ---
+        window.handleReservation = (button) => {
+            const name = button.getAttribute('data-name');
+            const isOpen = button.getAttribute('data-open') === 'true';
+
+            if (!isOpen) {
+                 showModal("Reservation Failed", `${name} is currently closed. We can't proceed with the reservation.`, false);
+                 return;
+            }
+
+            // Simulate making a reservation
+            button.innerHTML = 'Booking...';
+            button.disabled = true;
+
+            setTimeout(() => {
+                showModal("Reservation Confirmed!", 
+                    `Your reservation for **${name}** has been successfully placed at 7:30 PM today (simulated). You are all set for dinner!`, 
+                    true
+                );
+                // Reset button state
+                button.innerHTML = 'Reservation Placed';
+                button.classList.remove('bg-green-700');
+                button.classList.add('bg-green-900');
+            }, 1500);
+        };
+
+    </script>
+</body>
+</html>
