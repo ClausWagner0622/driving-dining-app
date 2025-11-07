@@ -212,7 +212,7 @@
             const userLocation = await getLocation();
 
             const userQuery = `Find three dining options that match this criteria: "${voiceCommand}". Assume I want the restaurants near ${userLocation}.`;
-            const apiKey = ""; // Canvas will provide this if not empty
+            const apiKey = AIzaSyB4UbzpmFUlfuK-Ihgho2ePhCTOaHLo50U; // Canvas will provide this if not empty
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
 
             const systemPrompt = "You are a specialized search engine for local dining. Given a user's request, find three high-quality, relevant restaurant suggestions using the Google Search tool. Your response MUST strictly adhere to the provided JSON schema. For the 'rating', find the actual star rating from search results. For the 'openNow' field, determine if the restaurant is currently open based on the search results and current time. Ensure the search results are currently relevant to the user's location.";
